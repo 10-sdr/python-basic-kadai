@@ -1,0 +1,14 @@
+Sub Run_Python1()
+ 
+Dim wsh As WshShell
+Set wsh = CreateObject("WScript.Shell")
+ 
+Dim py_file As String
+py_file = "C:\Users\qqq\OneDrive\デスクトップ\sample\print_cal.py " '実行したいpyファイルのフルパス
+ 
+Dim cmd_str As String
+cmd_str = "python " & py_file
+                                  
+Call wsh.Exec(cmd_str)
+ 
+End Sub
