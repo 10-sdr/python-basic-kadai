@@ -1,0 +1,53 @@
+Sub GetImportantMails_ByDate()
+
+    Dim olApp As Object
+    Dim olNs As Object
+    Dim olFolder As Object
+    Dim olItem As Object
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim targetDate As Date
+    Dim startTime As Date, endTime As Date
+
+    '▼取得したい日付を指定（例：2025/10/17）
+    targetDate = DateValue("2025/10/17")
+    startTime = targetDate
+    endTime = targetDate + 1
+
+    '▼シート設定
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    ws.Cells.Clear
+    ws.Range("A1:C1").Value = Array("受信日時", "送信者", "件名")
+
+    '▼Outlookオブジェクト取得
+    On Error Resume Next
+    Set olApp = GetObject(, "Outlook.Application")
+    If olApp Is Nothing Then Set olApp = CreateObject("Outlook.Application")
+    On Error GoTo 0
+
+    Set olNs = olApp.GetNamespace("MAPI")
+    Set olFolder = olNs.GetDefaultFolder(6)  '6 = 受信トレイ
+
+    i = 2
+
+    '▼メールアイテムを走査
+    For Each olItem In olFolder.Items
+        If olItem.Class = 43 Then 'MailItem
+            With olItem
+                '受信日・重要フラグ判定
+                If .ReceivedTime >= startTime And .ReceivedTime < endTime Then
+                    If .Importance = 2 Then '2=高重要度
+                        ws.Cells(i, 1).Value = .ReceivedTime
+                        ws.Cells(i, 2).Value = .SenderName
+                        ws.Cells(i, 3).Value = .Subject
+                        i = i + 1
+                    End If
+                End If
+            End With
+        End If
+    Next
+
+    MsgBox "完了しました。該当メール数：" & i - 2, vbInformation
+
+End Sub
+
