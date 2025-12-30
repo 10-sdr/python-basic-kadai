@@ -1,0 +1,91 @@
+Sub 画像報告書(S_cell As Long, E_cell As Long)
+Dim my_path As String, my_id As String, S_col As Long, S_row As Long, E_col As Long, e_row As Long
+Dim ws1 As Worksheet, WS2 As Worksheet, WS3 As Worksheet, i As Long, imgName As String
+Dim objShape As Object
+
+Set ws1 = Sheets("画像pathリスト")
+Set WS2 = Sheets("SDR報告書")
+'Set Ws3 = Sheets("SDR報告書②")
+
+Application.ScreenUpdating = False
+Sheets("SDR報告書").Select
+'#############################################################
+'貼り付ける前に画像を削除
+'画像pathリストのA列の名前を取得
+'カテゴリ別にすること
+'##############################################################
+For i = S_cell To E_cell
+        imgName = ws1.Range("A" & i).Value
+        
+        If imgName <> "" Then
+            On Error Resume Next
+            WS2.Shapes(imgName).Delete
+            On Error GoTo 0
+        End If
+    Next i
+'#############################################################
+For i = S_cell To E_cell
+'            my_path = Sheets("top").Range("J3").Value & "\REMANNO6_" & my_id & "\" & ws1.Cells(i, "B").Value
+            my_path = ws1.Cells(i, "B").Value
+
+       If Dir(my_path) = "" Then
+            GoTo tugi
+        End If
+        
+        S_col = ws1.Cells(i, "C").Value
+        S_row = ws1.Cells(i, "D").Value
+        E_col = ws1.Cells(i, "E").Value
+        e_row = ws1.Cells(i, "F").Value
+        
+        Set objShape = WS2.Shapes.AddPicture( _
+                        Filename:=my_path, _
+                        LinkToFile:=False, _
+                        SaveWithDocument:=True, _
+                        Left:=WS2.Cells(S_col, S_row).Left, _
+                        Top:=WS2.Cells(S_col, S_row).Top, _
+                        Width:=WS2.Range(Cells(S_col, S_row), Cells(E_col, e_row)).Width, _
+                        Height:=WS2.Range(Cells(S_col, S_row), Cells(E_col, e_row)).Height)
+                        
+                            objShape.Name = ws1.Cells(i, "A").Value
+
+tugi:
+Next i
+
+Application.ScreenUpdating = True
+End Sub
+Sub GetSelectedShapeName()
+'#######################
+'選択削除
+'#######################
+    Dim shp As Shape
+    Dim Img_Path As String
+    Dim ws As Worksheet
+    
+    Set ws = ThisWorkbook.Sheets("SDR報告書") ' 必要に応じて変更
+    
+    ' 選択されているオブジェクトが図形か確認
+    On Error Resume Next
+    If Selection.ShapeRange.Count = 0 Then
+        MsgBox "図形や画像が選択されていません。", vbExclamation
+        Exit Sub
+    End If
+    On Error GoTo 0
+    
+    ' 選択された図形を処理（複数選択対応）
+    For Each shp In Selection.ShapeRange
+        ' XLOOKUPで画像パス取得
+        Img_Path = WorksheetFunction.XLookup(shp.Name, _
+                     Sheets("画像pathリスト").Range("A:A"), _
+                     Sheets("画像pathリスト").Range("B:B"), "", False, 1)
+        
+        ' 図形削除
+        ws.Shapes(shp.Name).Delete
+        
+        ' ファイル削除（パスが存在する場合のみ）
+        If Img_Path <> "" And Dir(Img_Path) <> "" Then
+            Kill Img_Path
+        End If
+    Next shp
+    
+'    MsgBox "選択した図形と対応するファイルを削除しました。", vbInformation
+End Sub
