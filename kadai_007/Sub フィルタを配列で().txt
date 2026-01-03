@@ -1,0 +1,128 @@
+Sub フィルタを配列で()
+'クラス配列サンプル
+Dim keyID As Long: keyID = 11
+Call aGetFilteredData(11)
+End Sub
+Sub aGetFilteredData( _
+    ByVal TARGET_CATEGORY As Long, _
+    Optional ByVal srcSheetName As String = "下書きlist", _
+    Optional ByVal outSheetName As String = "抽出結果", _
+    Optional ByVal COL_COUNT As Long = 15 _
+)
+
+'   #######################
+'   srcSheetName masterのシート名
+' 　COL_COUNT masterのcolumns数
+
+    Dim wsSrc As Worksheet, wsDst As Worksheet
+    Dim lastRow As Long, i As Long, r As Long
+    Dim srcArr As Variant, outArr As Variant
+
+    Dim categoryIndex As Object   ' Dictionary
+    Dim targetItems As Collection
+    Dim item As CategoryItem
+
+    Set wsSrc = ThisWorkbook.Sheets(srcSheetName)
+
+    '==== 出力先シート ====
+    Set wsDst = ThisWorkbook.Sheets(outSheetName)
+
+    wsDst.Cells.Clear
+
+    '==== 最終行 ====
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then
+        MsgBox "データがありません。"
+        Exit Sub
+    End If
+
+    '==== 配列に一括読込 ====
+    srcArr = wsSrc.Range("A2").Resize(lastRow - 1, COL_COUNT).value
+
+    '==== Dictionary 初期化 ====
+    Set categoryIndex = CreateObject("Scripting.Dictionary")
+
+    '==== 配列 → Class → Dictionary ====
+    For i = 1 To UBound(srcArr, 1)
+
+        Set item = New CategoryItem
+        item.InitFromArray srcArr, i   ' ← 行丸ごと保持
+
+        If Not categoryIndex.Exists(item.CategoryNo) Then
+            categoryIndex.Add item.CategoryNo, New Collection
+        End If
+
+        categoryIndex(item.CategoryNo).Add item
+
+    Next i
+
+    '==== カテゴリ取得 ====
+    If Not categoryIndex.Exists(TARGET_CATEGORY) Then
+        MsgBox "該当データはありません。"
+        Exit Sub
+    End If
+
+    Set targetItems = categoryIndex(TARGET_CATEGORY)
+
+    '==== 出力用配列 ====
+    ReDim outArr(1 To targetItems.Count, 1 To COL_COUNT)
+    Dim c As Long
+Debug.Print item.Values(2)
+    r = 1
+    For Each item In targetItems
+        For c = 1 To COL_COUNT
+            outArr(r, c) = item.Values(c)
+        Next c
+        r = r + 1
+    Next item
+    '==== ヘッダーコピー ====
+    wsSrc.Range("A1").Resize(1, COL_COUNT).Copy wsDst.Range("A1")
+
+    '==== 一括出力 ====
+    wsDst.Range("A2").Resize(UBound(outArr, 1), COL_COUNT).value = outArr
+
+    MsgBox "抽出完了！ 件数：" & targetItems.Count
+
+
+End Sub
+Sub カテゴリをキーに配置現象配置()
+Call qcategory_paste(11)
+End Sub
+Sub qcategory_paste(ID As Long)
+Dim ws As Worksheet, wsDst As Worksheet, Xrange As Range, Zrange As Range
+Dim sheet_name As String, range_ As String, i As Long
+
+Set ws = Sheets("下書きlist")
+Set wsDst = Sheets("下書き")
+Set Xrange = WorksheetFunction.XLookup(ID, ws.Range("A:A"), ws.Range("B:B"), "", False, 1)
+Set Zrange = WorksheetFunction.XLookup(ID, wsDst.Range("A:A"), wsDst.Range("A:A"), "", False, 1)
+
+For i = 1 To 6
+    sheet_name = Xrange.value
+    range_ = Xrange.Offset(0, i).value
+    Sheets(sheet_name).Range(range_).value = Zrange.Offset(0, i).value
+Next i
+
+For i = 7 To 12
+    sheet_name = Xrange.Offset(0, 7).value
+    range_ = Xrange.Offset(0, i + 1).value
+    Sheets(sheet_name).Range(range_).value = Zrange.Offset(0, i - 6).value
+Next i
+
+End Sub
+クラス
+Option Explicit
+
+Private pValues As Variant
+
+Public Sub InitFromArray(srcArr As Variant, rowIndex As Long)
+    pValues = Application.Index(srcArr, rowIndex, 0)
+End Sub
+
+Public Property Get CategoryNo() As Long
+    CategoryNo = pValues(1)
+End Property
+
+Public Property Get Values() As Variant
+    Values = pValues
+End Property
