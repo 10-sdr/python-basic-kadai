@@ -1,0 +1,98 @@
+Private cn As ADODB.Connection
+
+'--------------------------------------------------
+' DBオープン（再接続リトライ付き）
+' retryCount : 最大リトライ回数（例 3）
+' waitSec    : リトライ間隔（秒）
+'--------------------------------------------------
+Public Sub OpenDB( _
+    Optional retryCount As Long = 3, _
+    Optional waitSec As Double = 1 _
+)
+    Dim i As Long
+    
+    For i = 1 To retryCount
+        On Error Resume Next
+        
+        Set cn = New ADODB.Connection
+        cn.Provider = "Microsoft.ACE.OLEDB.12.0"
+        cn.Open dbPath
+        MsgBox cn.State
+        MsgBox adStateOpen
+        ' 接続成功
+        If Err.Number = 0 And cn.State = adStateOpen Then
+            On Error GoTo 0
+            Exit Sub
+        End If
+        
+        ' 失敗時後始末
+        On Error GoTo 0
+        Set cn = Nothing
+        
+        ' 最後の1回でなければ待つ
+        If i < retryCount Then
+            DoEvents
+            Application.Wait Now + TimeSerial(0, 0, waitSec)
+        End If
+    Next i
+    
+    ' 全リトライ失敗
+    Err.Raise vbObjectError + 2000, "clsAccessDB.OpenDB", _
+              "Accessに接続できませんでした。" & vbCrLf & _
+              "リトライ回数：" & retryCount & vbCrLf & _
+              "DBパス：" & dbPath
+End Sub
+
+Public Function GetRecordset(sql As String) As ADODB.Recordset
+    Dim rs As New ADODB.Recordset
+    rs.Open sql, cn, adOpenKeyset, adLockReadOnly
+    Set GetRecordset = rs
+End Function
+
+Public Sub CloseDB()
+    If Not cn Is Nothing Then
+        If cn.State = adStateOpen Then cn.Close
+    End If
+    Set cn = Nothing
+End Sub
+
+Sub 在庫()
+    Dim db As New clsAccessDB
+    Dim rs As ADODB.Recordset
+    Dim sql As String
+    Dim i As Long
+    
+    On Error GoTo ErrHandler
+    
+    sql = "SELECT [ロケーション].品番, [ロケーション].[ロケーション], " & _
+          "Left([品番],12) AS 品番1 " & _
+          "FROM ロケーション " & _
+          "WHERE [ロケーション].出庫日 Is Null;"
+    
+    '  3回リトライ・1秒待ち
+    db.OpenDB 3, 1
+    
+    Set rs = db.GetRecordset(sql)
+    
+    With ThisWorkbook.Worksheets("在庫")
+        .Cells.Clear
+        .Range("A2").CopyFromRecordset rs
+        For i = 0 To rs.Fields.Count - 1
+            .Cells(1, i + 1).Value = rs.Fields(i).Name
+        Next
+    End With
+
+Cleanup:
+    If Not rs Is Nothing Then
+        If rs.State = adStateOpen Then rs.Close
+    End If
+    db.CloseDB
+    Exit Sub
+
+ErrHandler:
+    MsgBox _
+        "在庫データを取得できませんでした。" & vbCrLf & vbCrLf & _
+        Err.Description, vbExclamation, "Access接続エラー"
+    Resume Cleanup
+End Sub
+
