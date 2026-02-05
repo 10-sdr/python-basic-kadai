@@ -1,0 +1,324 @@
+Private cn As ADODB.Connection
+Public Const ACE_PROVIDER As String = "Microsoft.ACE.OLEDB.12.0"
+
+Public Const TBL_LOCATION As String = "ロケーション"
+Public Const TBL_SHIPMENT As String = "出荷"
+
+Sub 入庫処理_Main()
+
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("入庫")
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    Dim repo As New clsDbRepository
+    Dim rs As ADODB.Recordset
+    Dim data As clsStockTransactionData
+    Dim errList As Collection
+    Set errList = New Collection
+
+
+    '========================
+    ' 初回接続（失敗は表示）
+    '========================
+    If Not repo.TryOpenConnection(True) Then Exit Sub
+
+    Set rs = repo.OpenTableRS(TBL_LOCATION)
+    repo.BeginTran
+
+    Dim i As Long
+
+    For i = 2 To lastRow
+
+        On Error GoTo RowError
+
+        '------------------------
+        ' ループ内 再接続（表示しない）
+        '------------------------
+        If Not repo.IsAlive Then
+            If Not repo.TryOpenConnection(False) Then
+                errList.Add "行" & i & "：DB再接続失敗"
+                GoTo ContinueNext
+            End If
+            Set rs = repo.OpenTableRS(TBL_LOCATION)
+        End If
+        
+        If ws.Cells(i, 12).Value = "error" Then GoTo ContinueNext
+
+        '------------------------
+        ' データ作成
+        '------------------------
+        Set data = New clsStockTransactionData
+        With data
+            .Hinban = ws.Cells(i, 6).Value
+            .Location = ws.Cells(i, 5).Value
+            .NyukoDate = ws.Cells(i, 1).Value
+            .NyukoTime = ws.Cells(i, 2).Value
+            .Worker = ws.Cells(i, 4).Value
+            .Validate
+        End With
+
+        '------------------------
+        ' 検索
+        '------------------------
+        rs.Find "品番 = '" & data.Hinban & "'"
+        If rs.EOF Then
+            errList.Add "行" & i & "：品番未登録 → " & data.Hinban
+            GoTo ContinueNext
+        End If
+
+        '------------------------
+        ' 更新
+        '------------------------
+        With rs
+            .Fields("ロケーション").Value = data.Location
+            .Fields("入庫日").Value = data.NyukoDate
+            .Fields("入庫時間").Value = data.NyukoTime
+            .Fields("入庫作業者").Value = data.Worker
+            .Update
+        End With
+
+ContinueNext:
+        Set data = Nothing
+        On Error GoTo 0
+        GoTo NextRow
+
+RowError:
+        errList.Add "行" & i & "：" & Err.Description
+        Err.Clear
+        Resume ContinueNext
+
+NextRow:
+    Next i
+
+    '========================
+    ' 終了
+    '========================
+    If errList.Count = 0 Then
+        repo.CommitTran
+        MsgBox "入庫処理が完了しました", vbInformation
+    Else
+        repo.RollbackTran
+        ShowError errList
+    End If
+
+    rs.Close
+    repo.CloseAll
+End Sub
+Sub ShowError(errList As Collection)
+
+    Dim msg As String, v As Variant
+    msg = "処理エラー一覧：" & vbCrLf & vbCrLf
+
+    For Each v In errList
+        msg = msg & "・" & v & vbCrLf
+    Next
+
+    MsgBox msg, vbExclamation
+End Sub
+Sub insertShipmentData(ByVal i As Long)
+
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("出荷依頼転送")
+
+    Dim repo As New clsDbRepository
+    Dim rs As ADODB.Recordset
+    Dim data As clsStockTransactionData
+
+    On Error GoTo ErrHandler
+
+    '------------------------
+    ' 接続（初回：表示あり）
+    '------------------------
+    If Not repo.TryOpenConnection(True) Then Exit Sub
+
+    Set rs = repo.OpenTableRS(TBL_SHIPMENT)
+
+
+    '------------------------
+    ' データ作成
+    '------------------------
+    Set data = New clsStockTransactionData
+    With data
+        .KanriNo = ws.Cells(i, 2).Value
+        .Hinban = getTextLength(i)
+        .shukkaDate = ws.Cells(i, 1).Value
+        .Kishu = ws.Cells(i, 3).Value
+        .Bui = ws.Cells(i, 4).Value
+        .Kubun = ws.Cells(i, 5).Value
+        .Location = ws.Cells(i, 10).Value
+        .KeyHinban = ws.Cells(i, 9).Value
+        .Validate
+    End With
+
+    '------------------------
+    ' 追加
+    '------------------------
+    With rs
+        .AddNew
+        .Fields("管理番号").Value = data.KanriNo
+        .Fields("品番").Value = data.Hinban
+        .Fields("出荷日").Value = data.shukkaDate
+        .Fields("機種").Value = data.Kishu
+        .Fields("部位").Value = data.Bui
+        .Fields("区分").Value = data.Kubun
+        .Fields("ロケーション").Value = data.Location
+        .Fields("key品番").Value = data.KeyHinban
+        .Update
+    End With
+
+Cleanup:
+    On Error Resume Next
+    rs.Close
+    repo.CloseAll
+    Set rs = Nothing
+    Set data = Nothing
+    Exit Sub
+
+ErrHandler:
+    MsgBox "出荷登録エラー（行 " & i & "）" & vbCrLf & Err.Description, vbExclamation
+    Resume Cleanup
+End Sub
+
+Option Explicit
+
+Private cn As ADODB.Connection
+Private Const MAX_RETRY As Long = 3
+
+
+'================================
+' 接続（DBパスは内部で取得）
+'================================
+Public Function TryOpenConnection( _
+    Optional showMessage As Boolean = False _
+) As Boolean
+
+    Dim retry As Long
+    Dim dbPath As String
+    dbPath = GetDbPath()   ' ← ここで取得
+
+    For retry = 1 To MAX_RETRY
+        On Error Resume Next
+
+        If cn Is Nothing Then
+            Set cn = New ADODB.Connection
+            cn.Provider = ACE_PROVIDER
+        End If
+
+        If cn.State <> adStateOpen Then
+            cn.Open dbPath
+        End If
+
+        If Err.Number = 0 And cn.State = adStateOpen Then
+            TryOpenConnection = True
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        Err.Clear
+        On Error GoTo 0
+        DoEvents
+    Next retry
+
+    TryOpenConnection = False
+
+    If showMessage Then
+        MsgBox "DB接続に3回失敗しました。" & vbCrLf & _
+               "Box Drive またはネットワークを確認してください。", _
+               vbCritical
+    End If
+End Function
+
+'========================
+' 接続状態
+'========================
+Public Function IsAlive() As Boolean
+    IsAlive = False
+    If Not cn Is Nothing Then
+        If cn.State = adStateOpen Then IsAlive = True
+    End If
+End Function
+
+'========================
+' トランザクション
+'========================
+Public Sub BeginTran()
+    If IsAlive Then cn.BeginTrans
+End Sub
+
+Public Sub CommitTran()
+    If IsAlive Then cn.CommitTrans
+End Sub
+
+Public Sub RollbackTran()
+    If IsAlive Then cn.RollbackTrans
+End Sub
+
+'========================
+' Recordset
+'========================
+'Public Function OpenLocationRS() As ADODB.Recordset
+'    Dim rs As New ADODB.Recordset
+'    rs.Open _
+'        Source:="ロケーション", _
+'        ActiveConnection:=cn, _
+'        CursorType:=adOpenKeyset, _
+'        LockType:=adLockPessimistic
+'    Set OpenLocationRS = rs
+'End Function
+
+'========================
+' 終了
+'========================
+Public Sub CloseAll()
+    If Not cn Is Nothing Then
+        If cn.State = adStateOpen Then cn.Close
+    End If
+End Sub
+
+'Public Function OpenShipmentRS() As ADODB.Recordset
+'
+'    Dim rs As New ADODB.Recordset
+'
+'    rs.Open _
+'        Source:="出荷", _
+'        ActiveConnection:=cn, _
+'        CursorType:=adOpenKeyset, _
+'        LockType:=adLockPessimistic
+'
+'    Set OpenShipmentRS = rs
+'End Function
+
+Public Function OpenTableRS(ByVal tableName As String) As ADODB.Recordset
+
+    Dim rs As New ADODB.Recordset
+
+    rs.Open _
+        Source:=tableName, _
+        ActiveConnection:=cn, _
+        CursorType:=adOpenKeyset, _
+        LockType:=adLockPessimistic
+
+    Set OpenTableRS = rs
+End Function
+
+Option Explicit
+
+Public KanriNo As String      ' 管理番号
+Public Hinban As String       ' 品番
+Public TranDate As Date       ' 入出庫日
+Public TranTime As String    ' 時刻（必要なら）
+Public Kishu As String
+Public Bui As String
+Public Kubun As String
+Public Location As String
+Public Worker As String
+Public Quantity As Long
+Public KeyHinban As String
+
+Public Sub Validate()
+    If Hinban = "" Then Err.Raise vbObjectError + 100, , "品番が空です"
+End Sub
+
