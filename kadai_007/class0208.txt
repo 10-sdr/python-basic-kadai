@@ -1,0 +1,322 @@
+Option Explicit
+
+'==== シート列定義 ====
+Private Const COL_DATE As Long = 1
+Private Const COL_TIME As Long = 2
+Private Const COL_WORKER As Long = 4
+Private Const COL_LOCATION As Long = 5
+Private Const COL_HINBAN As Long = 6
+Private Const COL_STATUS As Long = 12
+
+Private Const TBL_LOCATION As String = "ロケーション"
+
+Sub 入庫処理_Main()
+
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("入庫")
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    Dim repo As New clsDbRepository
+    Dim errList As New Collection
+
+    ' 初回接続
+    If Not repo.TryOpenConnection(True) Then Exit Sub
+
+    repo.BeginTran
+
+    Dim i As Long
+    For i = 2 To lastRow
+        Dim errMsg As String
+        errMsg = ProcessOneRow(ws, i, repo)
+
+        If errMsg <> "" Then
+            errList.Add "行" & i & "：" & errMsg
+        End If
+    Next i
+
+    If errList.Count = 0 Then
+        repo.CommitTran
+        MsgBox "入庫処理が完了しました", vbInformation
+    Else
+        repo.RollbackTran
+        ShowError errList
+    End If
+
+    repo.CloseAll
+End Sub
+Private Function ProcessOneRow( _
+    ws As Worksheet, _
+    rowIndex As Long, _
+    repo As clsDbRepository _
+) As String
+
+    On Error GoTo ErrHandler
+
+    ' ステータスチェック
+    If ws.Cells(rowIndex, COL_STATUS).Value = "error" Then Exit Function
+
+    ' 接続生存確認
+    If Not repo.IsAlive Then
+        If Not repo.TryOpenConnection(False) Then
+            ProcessOneRow = "DB再接続失敗"
+            Exit Function
+        End If
+    End If
+
+    ' データ生成
+    Dim data As New clsStockTransactionData
+    With data
+        .Hinban = ws.Cells(rowIndex, COL_HINBAN).Value
+        .Location = ws.Cells(rowIndex, COL_LOCATION).Value
+        .NyukoDate = ws.Cells(rowIndex, COL_DATE).Value
+        .NyukoTime = ws.Cells(rowIndex, COL_TIME).Value
+        .Worker = ws.Cells(rowIndex, COL_WORKER).Value
+        .Validate
+    End With
+
+    ' 検索
+    If Not repo.ExistsLocation(data.Hinban) Then
+        ProcessOneRow = "品番未登録 → " & data.Hinban
+        Exit Function
+    End If
+
+    ' 更新
+    repo.UpdateLocation data
+
+    Exit Function
+
+ErrHandler:
+    ProcessOneRow = Err.Description
+End Function
+
+Option Explicit
+
+Private cn As ADODB.Connection
+Private Const MAX_RETRY As Long = 3
+
+'========================
+' 接続
+'========================
+Public Function TryOpenConnection(Optional showMessage As Boolean = False) As Boolean
+
+    Dim retry As Long
+    Dim dbPath As String
+    dbPath = GetDbPath()
+
+    For retry = 1 To MAX_RETRY
+        On Error Resume Next
+
+        If cn Is Nothing Then
+            Set cn = New ADODB.Connection
+            cn.PROVIDER = ACE_PROVIDER
+        End If
+
+        If cn.State <> adStateOpen Then cn.Open dbPath
+
+        If Err.Number = 0 And cn.State = adStateOpen Then
+            TryOpenConnection = True
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        Err.Clear
+        On Error GoTo 0
+        DoEvents
+    Next retry
+
+    If showMessage Then
+        MsgBox "DB接続に失敗しました。", vbCritical
+    End If
+End Function
+
+Public Function IsAlive() As Boolean
+    IsAlive = Not cn Is Nothing And cn.State = adStateOpen
+End Function
+
+'========================
+' トランザクション
+'========================
+Public Sub BeginTran()
+    If IsAlive Then cn.BeginTrans
+End Sub
+
+Public Sub CommitTran()
+    If IsAlive Then cn.CommitTrans
+End Sub
+
+Public Sub RollbackTran()
+    If IsAlive Then cn.RollbackTrans
+End Sub
+
+'========================
+' 業務SQL
+'========================
+Public Function ExistsLocation(ByVal Hinban As String) As Boolean
+
+    Dim rs As New ADODB.Recordset
+    rs.Open _
+        "SELECT 品番 FROM ロケーション WHERE 品番 = '" & Hinban & "'", _
+        cn, adOpenForwardOnly, adLockReadOnly
+
+    ExistsLocation = Not rs.EOF
+    rs.Close
+End Function
+
+Public Sub UpdateLocation(ByVal data As clsStockTransactionData)
+
+    cn.Execute _
+        "UPDATE ロケーション SET " & _
+        "ロケーション = '" & data.Location & "', " & _
+        "入庫日 = #" & Format(data.NyukoDate, "yyyy/mm/dd") & "#, " & _
+        "入庫時間 = '" & data.NyukoTime & "', " & _
+        "入庫作業者 = '" & data.Worker & "' " & _
+        "WHERE 品番 = '" & data.Hinban & "'"
+
+End Sub
+
+'========================
+' 終了
+'========================
+Public Sub CloseAll()
+    If Not cn Is Nothing Then
+        If cn.State = adStateOpen Then cn.Close
+    End If
+End Sub
+
+Option Explicit
+
+Public Hinban As String
+Public Location As String
+Public NyukoDate As Date
+Public NyukoTime As String
+Public Worker As String
+
+Public Sub Validate()
+    If Hinban = "" Then Err.Raise vbObjectError + 100, , "品番が空です"
+    If Location = "" Then Err.Raise vbObjectError + 101, , "ロケーションが空です"
+End Sub
+
+Option Explicit
+
+'==== 列定義 ====
+Private Const COL_SHUKKA_DATE As Long = 1
+Private Const COL_KANRI_NO As Long = 2
+Private Const COL_KISHU As Long = 3
+Private Const COL_BUI As Long = 4
+Private Const COL_KUBUN As Long = 5
+Private Const COL_HINBAN As Long = 6
+Private Const COL_KEY_HINBAN As Long = 9
+Private Const COL_LOCATION As Long = 10
+
+Private Const TBL_SHIPMENT As String = "出荷"
+
+Sub 出荷依頼登録_Main()
+
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("出荷依頼転送")
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    Dim repo As New clsDbRepository
+    Dim errList As New Collection
+
+    If Not repo.TryOpenConnection(True) Then Exit Sub
+    repo.BeginTran
+
+    Dim i As Long
+    For i = 2 To lastRow
+        Dim errMsg As String
+        errMsg = ProcessShipmentRow(ws, i, repo)
+
+        If errMsg <> "" Then
+            errList.Add "行" & i & "：" & errMsg
+        End If
+    Next i
+
+    If errList.Count = 0 Then
+        repo.CommitTran
+        MsgBox "出荷依頼登録が完了しました", vbInformation
+    Else
+        repo.RollbackTran
+        ShowError errList
+    End If
+
+    repo.CloseAll
+End Sub
+Private Function ProcessShipmentRow( _
+    ws As Worksheet, _
+    rowIndex As Long, _
+    repo As clsDbRepository _
+) As String
+
+    On Error GoTo ErrHandler
+
+    ' 接続確認
+    If Not repo.IsAlive Then
+        If Not repo.TryOpenConnection(False) Then
+            ProcessShipmentRow = "DB再接続失敗"
+            Exit Function
+        End If
+    End If
+
+    ' データ生成
+    Dim data As New clsStockTransactionData
+    With data
+        .KanriNo = ws.Cells(rowIndex, COL_KANRI_NO).Value
+        .Hinban = ws.Cells(rowIndex, COL_HINBAN).Value
+        .shukkaDate = ws.Cells(rowIndex, COL_SHUKKA_DATE).Value
+        .Kishu = ws.Cells(rowIndex, COL_KISHU).Value
+        .Bui = ws.Cells(rowIndex, COL_BUI).Value
+        .Kubun = ws.Cells(rowIndex, COL_KUBUN).Value
+        .Location = ws.Cells(rowIndex, COL_LOCATION).Value
+        .KeyHinban = ws.Cells(rowIndex, COL_KEY_HINBAN).Value
+        .Validate
+    End With
+
+    ' 登録
+    repo.InsertShipment data
+    Exit Function
+
+ErrHandler:
+    ProcessShipmentRow = Err.Description
+End Function
+'clsDbRepository：出荷 INSERT 専用メソッド追加
+Public Sub InsertShipment(ByVal data As clsStockTransactionData)
+
+    cn.Execute _
+        "INSERT INTO 出荷 (" & _
+        "管理番号, 品番, 出荷日, 機種, 部位, 区分, ロケーション, key品番" & _
+        ") VALUES (" & _
+        "'" & data.KanriNo & "', " & _
+        "'" & data.Hinban & "', " & _
+        "#" & Format(data.shukkaDate, "yyyy/mm/dd") & "#, " & _
+        "'" & data.Kishu & "', " & _
+        "'" & data.Bui & "', " & _
+        "'" & data.Kubun & "', " & _
+        "'" & data.Location & "', " & _
+        "'" & data.KeyHinban & "'" & _
+        ")"
+
+End Sub
+'clsStockTransactionData（出荷対応版）
+Option Explicit
+
+Public KanriNo As String
+Public Hinban As String
+Public shukkaDate As Date
+Public Kishu As String
+Public Bui As String
+Public Kubun As String
+Public Location As String
+Public KeyHinban As String
+
+Public Sub Validate()
+    If KanriNo = "" Then Err.Raise vbObjectError + 200, , "管理番号が空です"
+    If Hinban = "" Then Err.Raise vbObjectError + 201, , "品番が空です"
+End Sub
+
