@@ -1,0 +1,709 @@
+Option Explicit
+Public TestForceErrorOnSecond As Boolean
+Private testCallCount As Long
+
+'==== 列定義 ====
+Private Const COL_SHUKKA_DATE As Long = 1
+Private Const COL_KANRI_NO As Long = 2
+Private Const COL_KISHU As Long = 3
+Private Const COL_BUI As Long = 4
+Private Const COL_KUBUN As Long = 5
+Private Const COL_HINBAN As Long = 6
+Private Const COL_KEY_HINBAN As Long = 9
+Private Const COL_LOCATION As Long = 10
+Public Const ACE_PROVIDER As String = "Microsoft.ACE.OLEDB.12.0"
+Private Const TBL_SHIPMENT As String = "出荷"
+
+Sub 出荷依頼登録_Main()
+    Dim pathMgr As New clsPathManager
+    Dim fileChk As New clsFileChecker
+    Dim repo As New clsDbRepository
+    Dim errList As New Collection
+    Dim ws As Worksheet, lastRow As Long, i As Long, errMsg As String
+    
+    Set ws = ThisWorkbook.Worksheets("出荷依頼転送")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    If lastRow < 2 Then Exit Sub
+    If Not fileChk.TryCheck(pathMgr.TestFilePath, True) Then Exit Sub
+    If Not repo.TryOpenConnection(True) Then Exit Sub
+
+    For i = 2 To lastRow
+    
+        repo.BeginTran
+        
+        errMsg = ProcessShipmentRow(ws, i, repo)
+    
+        If errMsg = "" Then
+            repo.CommitTran
+        Else
+            repo.RollbackTran
+            errList.Add "行" & i & "：" & errMsg
+        End If
+        
+    Next i
+
+    If errList.Count = 0 Then
+        MsgBox "出荷依頼登録が完了しました", vbInformation
+    Else
+        ShowError errList
+    End If
+
+    repo.CloseAll
+
+End Sub
+
+Private Function ProcessShipmentRow( _
+    ws As Worksheet, _
+    rowIndex As Long, _
+    repo As clsDbRepository _
+) As String
+
+    On Error GoTo ErrHandler
+
+    If Not repo.IsAlive Then
+        If Not repo.TryOpenConnection(False) Then
+            ProcessShipmentRow = "DB再接続失敗"
+            Exit Function
+        End If
+    End If
+
+    ' データ生成
+    Dim data As New clsStockTransactionData
+    With data
+        .KanriNo = ws.Cells(rowIndex, COL_KANRI_NO).value
+        .hinban = ws.Cells(rowIndex, COL_HINBAN).value
+        .shukkaDate = ws.Cells(rowIndex, COL_SHUKKA_DATE).value
+        .Kishu = ws.Cells(rowIndex, COL_KISHU).value
+        .Bui = ws.Cells(rowIndex, COL_BUI).value
+        .Kubun = ws.Cells(rowIndex, COL_KUBUN).value
+        .Location = ws.Cells(rowIndex, COL_LOCATION).value
+        .KeyHinban = ws.Cells(rowIndex, COL_KEY_HINBAN).value
+        .Validate
+    End With
+
+    ' 登録
+    repo.InsertShipment data
+    Exit Function
+
+ErrHandler:
+    ProcessShipmentRow = Err.Description
+End Function
+Sub ShowError(errList As Collection)
+
+    Dim msg As String, v As Variant
+    msg = "処理エラー一覧：" & vbCrLf & vbCrLf
+
+    For Each v In errList
+        msg = msg & "・" & v & vbCrLf
+    Next
+
+    MsgBox msg, vbExclamation
+End Sub
+Sub 時差チェック()
+
+    Dim baseTime As Date
+    Dim nowTime As Date
+    Dim diffMin As Double
+    
+    ' A1の時間を取得
+    baseTime = Range("A1").value
+    
+    ' 現在時刻
+    nowTime = Now
+    
+    ' 分単位で差を計算
+    diffMin = DateDiff("n", baseTime, nowTime)
+    
+    ' 10分以上ならメッセージ
+    If diffMin >= 10 Then
+        MsgBox "10分以上経過しています"
+    End If
+
+End Sub
+Sub 外部リンク更新()
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+    
+    If Not IsEmpty(ThisWorkbook.LinkSources(xlLinkTypeExcelLinks)) Then
+        ThisWorkbook.UpdateLink _
+            Name:=ThisWorkbook.LinkSources(xlLinkTypeExcelLinks), _
+            Type:=xlLinkTypeExcelLinks
+    End If
+    
+    Application.Calculation = xlCalculationAutomatic
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+
+End Sub
+##################################################
+Option Explicit
+
+Public Function GetDBPath() As String
+    GetDBPath = Sheets("path").Range("C3").value & "\第一組立出来高.accdb"
+End Function
+
+Public Function SQL_塗装出来高ByDate() As String
+
+    Dim sql As String
+    
+    sql = ""
+    sql = sql & "SELECT "
+    sql = sql & "[おろし時間],[生産計画日],[ID],[機種],[品番],"
+    sql = sql & "[刻印],[バルブ],[合否],[作業者],[備考],[生産日付],"
+    sql = sql & "[塗装色],[光沢A],[光沢B],[光沢C],[光沢D],"
+    sql = sql & "[膜厚A],[膜厚B],[膜厚C],[膜厚D],[ID],[おろし日付] "
+    sql = sql & "FROM 塗装出来高 "
+    sql = sql & "WHERE [おろし日付] = ? "
+    sql = sql & "ORDER BY [おろし時間];"
+    
+    SQL_塗装出来高ByDate = sql
+
+End Function
+
+'Sub 塗装出来高作成シート(ByVal st_da As String)
+Sub 塗装出来高作成シート()
+Dim st_da As String: st_da = "2024/11/30"
+    Dim service As New CPaintResultService
+    Debug.Print CDate(st_da)
+    service.CreatePaintSheet CDate(st_da)
+
+End Sub
+
+Public Function SQL_塗装出来高Insert() As String
+
+    Dim sql As String
+    
+    sql = ""
+    sql = sql & "INSERT INTO 塗装出来高 ("
+    sql = sql & "[生産計画日],[機種],[バルブ],[塗装色],[品番],"
+    sql = sql & "[生産日付],[作業者],[刻印],[おろし時間],"
+    sql = sql & "[おろし日付],[重複刻印]) "
+    sql = sql & "VALUES (?,?,?,?,?,?,?,?,?,?,?);"
+    
+    SQL_塗装出来高Insert = sql
+
+End Function
+Sub 塗装出来高登録()
+
+    Dim service As New CPaintResultService
+    service.RegisterPaintResult
+
+End Sub
+#######################################
+CAppError
+#####################################
+Option Explicit
+
+Public Sub Handle(ByVal procName As String)
+
+    MsgBox "エラー発生" & vbCrLf & _
+           "Proc: " & procName & vbCrLf & _
+           "内容: " & Err.Description, _
+           vbCritical, "システムエラー"
+
+End Sub
+
+#################################
+CDBCommand
+#############################
+Option Explicit
+
+Private mCmd As ADODB.Command
+
+Public Sub Init(ByVal conn As ADODB.Connection, ByVal sql As String)
+
+    Set mCmd = New ADODB.Command
+    Set mCmd.ActiveConnection = conn
+    mCmd.CommandText = sql
+    mCmd.CommandType = adCmdText
+
+End Sub
+
+Public Sub AddDateParam(ByVal value As Date)
+
+    mCmd.Parameters.Append _
+        mCmd.CreateParameter( _
+            Name:="p1", _
+            Type:=adDate, _
+            Direction:=adParamInput, _
+            value:=value)
+
+End Sub
+
+Public Function ExecuteRS() As ADODB.Recordset
+
+    Dim rs As New ADODB.Recordset
+    rs.Open mCmd, , adOpenForwardOnly, adLockReadOnly
+    Set ExecuteRS = rs
+
+End Function
+
+Public Sub AddParam(ByVal value As Variant)
+
+    mCmd.Parameters.Append _
+        mCmd.CreateParameter( _
+            Type:=adVariant, _
+            Direction:=adParamInput, _
+            value:=value)
+
+End Sub
+
+
+Public Sub ExecuteNonQuery()
+    mCmd.Execute
+End Sub
+
+
+####################################
+CDBConnection
+############################
+Option Explicit
+
+Private mConn As ADODB.Connection
+
+Public Sub OpenDB(ByVal dbPath As String)
+
+    Set mConn = New ADODB.Connection
+    mConn.PROVIDER = "Microsoft.ACE.OLEDB.12.0"
+    mConn.Open dbPath
+
+End Sub
+
+Public Property Get Connection() As ADODB.Connection
+    Set Connection = mConn
+End Property
+
+Public Sub CloseDB()
+
+    If Not mConn Is Nothing Then
+        If mConn.State = adStateOpen Then mConn.Close
+    End If
+    
+    Set mConn = Nothing
+
+End Sub
+
+
+############################
+CDBTransaction
+########################
+Option Explicit
+
+Private mConn As ADODB.Connection
+
+Public Sub Init(ByVal conn As ADODB.Connection)
+    Set mConn = conn
+End Sub
+
+Public Sub BeginTrans()
+    mConn.BeginTrans
+End Sub
+
+Public Sub Commit()
+    mConn.CommitTrans
+End Sub
+
+Public Sub Rollback()
+    mConn.RollbackTrans
+End Sub
+
+#####################
+CLogger
+###################
+Option Explicit
+
+Public Sub Info(ByVal message As String)
+    Debug.Print Now & " [INFO] " & message
+End Sub
+
+Public Sub Error(ByVal message As String)
+    Debug.Print Now & " [ERROR] " & message
+End Sub
+#########################
+clsDbRepository
+######################
+Option Explicit
+
+Private cn As ADODB.Connection
+Private Const MAX_RETRY As Long = 3
+
+'========================
+' 接続
+'========================
+Public Function TryOpenConnection(Optional showMessage As Boolean = False) As Boolean
+
+    Dim retry As Long
+    Dim dbPath As String
+    dbPath = get_dbPath
+       
+    For retry = 1 To MAX_RETRY
+        On Error Resume Next
+
+        If cn Is Nothing Then
+            Set cn = New ADODB.Connection
+            cn.PROVIDER = ACE_PROVIDER
+        End If
+
+        If cn.State <> adStateOpen Then cn.Open dbPath
+
+'        If Err.Number = 0 And cn.State = adStateOpen Then
+        If K <> 3 Then
+            TryOpenConnection = True
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        Err.Clear
+        On Error GoTo 0
+        DoEvents
+    Next retry
+
+    If showMessage Then
+        MsgBox "DB接続に失敗しました。", vbCritical
+    End If
+End Function
+
+Public Function IsAlive() As Boolean
+    IsAlive = Not cn Is Nothing And cn.State = adStateOpen
+End Function
+
+'========================
+' トランザクション
+'========================
+Public Sub BeginTran()
+    If IsAlive Then cn.BeginTrans
+End Sub
+
+Public Sub CommitTran()
+    If IsAlive Then cn.CommitTrans
+End Sub
+
+Public Sub RollbackTran()
+    If IsAlive Then cn.RollbackTrans
+End Sub
+
+'========================
+' 業務SQL
+'========================
+Public Function ExistsLocation(ByVal hinban As String) As Boolean
+
+    Dim rs As New ADODB.Recordset
+    rs.Open _
+        "SELECT 品番 FROM ロケーション WHERE 品番 = '" & hinban & "'", _
+        cn, adOpenForwardOnly, adLockReadOnly
+
+    ExistsLocation = Not rs.EOF
+    rs.Close
+End Function
+
+Public Sub UpdateLocation(ByVal data As clsStockTransactionData)
+
+    cn.Execute _
+        "UPDATE ロケーション SET " & _
+        "ロケーション = '" & data.Location & "', " & _
+        "入庫日 = #" & Format(data.NyukoDate, "yyyy/mm/dd") & "#, " & _
+        "入庫時間 = '" & data.NyukoTime & "', " & _
+        "入庫作業者 = '" & data.Worker & "' " & _
+        "WHERE 品番 = '" & data.hinban & "'"
+
+End Sub
+
+'========================
+' 終了
+'========================
+Public Sub CloseAll()
+    If Not cn Is Nothing Then
+        If cn.State = adStateOpen Then cn.Close
+    End If
+End Sub
+
+Public Sub InsertShipment(ByVal data As clsStockTransactionData)
+
+    cn.Execute _
+        "INSERT INTO 出荷 (" & _
+        "管理番号, 品番, 出荷日, 機種, 部位, 区分, ロケーション, key品番" & _
+        ") VALUES (" & _
+        "'" & data.KanriNo & "', " & _
+        "'" & data.hinban & "', " & _
+        "#" & Format(data.shukkaDate, "yyyy/mm/dd") & "#, " & _
+        "'" & data.Kishu & "', " & _
+        "'" & data.Bui & "', " & _
+        "'" & data.Kubun & "', " & _
+        "'" & data.Location & "', " & _
+        "'" & data.KeyHinban & "'" & _
+        ")"
+
+End Sub
+
+############################
+clsFileChecker
+#############################
+Option Explicit
+
+Private Const MAX_RETRY As Long = 3
+
+'========================
+' ファイル存在確認
+'========================
+Public Function TryCheck(ByVal filePath As String, _
+                         Optional showMessage As Boolean = False) As Boolean
+
+    Dim retry As Long
+
+    For retry = 1 To MAX_RETRY
+
+        On Error Resume Next
+
+        If Dir(filePath) <> "" Then
+            TryCheck = True
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        Err.Clear
+        On Error GoTo 0
+        DoEvents
+
+    Next retry
+
+    If showMessage Then
+        MsgBox "ファイルが見つかりません：" & vbCrLf & filePath, vbCritical
+    End If
+
+End Function
+##################################
+clsPathManager
+#################################
+Option Explicit
+
+Private Const SUB_FOLDER As String = "\test\"
+Private Const TEST_FILE As String = "test.xlsm"
+
+Private Function GetUserProfile() As String
+    GetUserProfile = Environ("USERPROFILE")
+End Function
+
+Public Property Get TestFilePath() As String
+    TestFilePath = GetUserProfile & SUB_FOLDER & TEST_FILE
+End Property
+#################################
+clsStockTransactionData
+###############################
+Option Explicit
+
+Public NyukoDate As Date
+Public NyukoTime As String
+Public Worker As String
+Public KanriNo As String
+Public hinban As String
+Public shukkaDate As Date
+Public Kishu As String
+Public Bui As String
+Public Kubun As String
+Public Location As String
+Public KeyHinban As String
+
+Public Sub Validate()
+    If KanriNo = "" Then Err.Raise vbObjectError + 200, , "管理番号が空です"
+    If hinban = "" Then Err.Raise vbObjectError + 201, , "品番が空です"
+End Sub
+###############################
+'=== CPaintResult ===
+############################
+Option Explicit
+
+Public 生産計画日 As Date
+Public 機種 As String
+Public バルブ As String
+Public 塗装色 As String
+Public 品番 As String
+Public 生産日付 As Date
+Public 作業者 As String
+Public 刻印 As String
+Public おろし時間 As String
+Public おろし日付 As Date
+Public 重複刻印 As String
+
+##########################
+CPaintResultRepo
+####################
+Option Explicit
+
+Public Sub Insert(result As CPaintResult, db As CDBConnection)
+    Dim rs As New ADODB.Recordset
+    
+    rs.Open "塗装出来高", db.Connection, _
+            adOpenKeyset, adLockPessimistic
+    
+    With rs
+        .AddNew
+        .Fields("生産計画日").value = result.生産計画日
+        .Fields("機種").value = result.機種
+        .Fields("バルブ").value = result.バルブ
+        .Fields("塗装色").value = result.塗装色
+        .Fields("品番").value = result.品番
+        .Fields("生産日付").value = result.生産日付
+        .Fields("作業者").value = result.作業者
+        .Fields("刻印").value = result.刻印
+        .Fields("おろし時間").value = result.おろし時間
+        .Fields("おろし日付").value = result.おろし日付
+        .Fields("重複刻印").value = result.重複刻印
+        .Update
+    End With
+
+    rs.Close
+End Sub
+
+###########################
+CPaintResultRepository
+###########################
+Option Explicit
+
+Private mConn As ADODB.Connection
+
+Public Sub Init(ByVal conn As ADODB.Connection)
+    Set mConn = conn
+End Sub
+
+Public Function GetByDate(ByVal targetDate As Date) As ADODB.Recordset
+
+    Dim cmd As New CDBCommand
+    
+    cmd.Init mConn, SQL_塗装出来高ByDate()
+    cmd.AddDateParam targetDate
+    
+    Set GetByDate = cmd.ExecuteRS()
+
+End Function
+
+
+Public Sub InsertFromSheet(ByVal ws As Worksheet)
+
+    Dim cmd As New CDBCommand
+    
+    cmd.Init mConn, SQL_塗装出来高Insert()
+    
+    cmd.AddParam ws.Range("B18").value   '生産計画日
+    cmd.AddParam ws.Range("D18").value   '機種
+    cmd.AddParam ws.Range("N18").value   'バルブ
+    cmd.AddParam ws.Range("O18").value   '塗装色
+    cmd.AddParam ws.Range("C18").value   '品番
+    cmd.AddParam ws.Range("S18").value   '生産日付
+    cmd.AddParam ws.Range("C2").value    '作業者
+    cmd.AddParam ws.Range("Q18").value   '刻印
+    cmd.AddParam ws.Range("K21").value   'おろし時間
+    cmd.AddParam ws.Range("L21").value   'おろし日付
+    cmd.AddParam ws.Range("T18").value   '重複刻印
+    
+    cmd.ExecuteNonQuery
+
+End Sub
+
+##########################
+CPaintResultService
+######################
+Option Explicit
+
+Public Sub CreatePaintSheet(ByVal targetDate As Date)
+
+    Dim db As New CDBConnection
+    Dim tran As New CDBTransaction
+    Dim repo As New CPaintResultRepository
+    Dim logger As New CLogger
+    Dim errH As New CAppError
+    Dim rs As ADODB.Recordset
+    
+    On Error GoTo ErrHandler
+    
+    logger.Info "処理開始"
+    
+    db.OpenDB GetDBPath()
+    
+    tran.Init db.Connection
+    tran.BeginTrans
+    
+    repo.Init db.Connection
+    Set rs = repo.GetByDate(targetDate)
+    
+    WriteToSheet rs
+    
+    tran.Commit
+    
+    logger.Info "正常終了"
+    
+    db.CloseDB
+    Exit Sub
+
+ErrHandler:
+    tran.Rollback
+    logger.Error Err.Description
+    errH.Handle "CreatePaintSheet"
+    db.CloseDB
+
+End Sub
+
+
+Private Sub WriteToSheet(ByVal rs As ADODB.Recordset)
+
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    
+    Set ws = Sheets("塗装出来高")
+    
+    ws.Range("C6:AT300").ClearContents
+    ws.Range("C6").CopyFromRecordset rs
+    
+    lastRow = ws.Cells(ws.Rows.Count, "G").End(xlUp).Row
+    
+    If lastRow > 30 Then
+        ActiveWindow.ScrollRow = lastRow - 10
+    Else
+        ActiveWindow.ScrollRow = 6
+    End If
+
+End Sub
+
+Public Sub RegisterPaintResult()
+
+    Dim db As New CDBConnection
+    Dim tran As New CDBTransaction
+    Dim repo As New CPaintResultRepository
+    Dim logger As New CLogger
+    Dim errH As New CAppError
+    Dim ws As Worksheet
+    
+    On Error GoTo ErrHandler
+    
+    Set ws = Sheets("list")
+    
+    logger.Info "登録処理開始"
+    
+    db.OpenDB GetDBPath()
+    
+    tran.Init db.Connection
+    tran.BeginTrans
+    
+    repo.Init db.Connection
+    repo.InsertFromSheet ws
+    
+    tran.Commit
+    
+    logger.Info "登録成功"
+    
+    db.CloseDB
+    
+    MsgBox "登録完了しました。", vbInformation
+    Exit Sub
+
+ErrHandler:
+    tran.Rollback
+    logger.Error Err.Description
+    errH.Handle "RegisterPaintResult"
+    db.CloseDB
+
+End Sub
+
+
