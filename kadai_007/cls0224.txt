@@ -1,0 +1,421 @@
+Option Explicit
+
+Sub readLocaData()
+    Dim tmp As Variant
+    Dim fPath As String
+    Dim buf As String, a As Variant, i As Long, j As Long
+    Dim i_day As String
+    Dim ws As Worksheet
+    Dim fileChk As New clsFileChecker
+    Dim pathMager As New clsPathManager
+    
+    Set ws = ThisWorkbook.Worksheets("free")
+    
+    ws.Rows("2:" & ws.Rows.Count).ClearContents
+    fPath = pathMager.csvPath
+    
+    If Not fileChk.TryCheck(fPath, True) Then GoTo exitpoint
+        
+    With CreateObject("ADODB.Stream")
+        .Charset = "UTF-8"
+        .Open
+        .LoadFromFile fPath
+        
+        Do Until .EOS
+        
+            buf = .ReadText(-2)
+            i = i + 1
+            tmp = Split(buf, ",")
+            
+            For j = 0 To UBound(tmp)
+                ws.Cells(i + 1, j + 1) = tmp(j)
+            Next j
+        Loop
+        
+        .Close
+    End With
+    
+    Call 入庫チェック実行(ws)
+    '
+    'UserForm1.Show
+    '
+    'Call 一覧更新
+    Exit Sub
+exitpoint:
+
+End Sub
+
+Sub 入庫チェック実行(ws As Worksheet)
+
+'    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim dict As Object
+    Dim i As Long
+    Dim key As String
+    
+'    Set ws = Sheets("free")
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    If lastRow < 2 Then Exit Sub
+    
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    '=========================
+    ' ① シート内重複チェック
+    '=========================
+    For i = 2 To lastRow
+        
+        key = Trim(ws.Cells(i, "F").value)
+              
+        If Len(ws.Cells(i, "F").value) <= 12 Then
+            ws.Cells(i, "H").value = "NG(品番短い)"
+        ElseIf dict.Exists(key) Then
+            ws.Cells(i, "H").value = "NG"
+        Else
+            dict.Add key, True
+            ws.Cells(i, "H").value = "OK"
+        End If
+        
+    Next i
+    
+    '=========================
+    ' ② Access側チェック
+    '=========================
+    
+   ロケーションチェック
+    
+End Sub
+Sub ロケーションチェック()
+ Dim db As New CDatabaseConnection
+    db.OpenDB "E:\ロケーション\ロケーション\REMN.accdb"
+    
+    Dim repo As New CPaintResultRepository
+    repo.SetConnection db
+    
+    Dim service As New CPaintResultService
+    service.Initia repo
+    
+    service.LocationDuplication Sheets("free")
+    
+    db.CloseDB
+
+End Sub
+
+clspathmanager
+
+Option Explicit
+
+Private SUB_FOLDER As String
+Private TEST_FILE As String
+
+Private Sub Class_Initialize()
+    SUB_FOLDER = Sheets("path").Range("C15").value
+    TEST_FILE = "_StorageLog.csv"
+End Sub
+
+Private Function GetUserProfile() As String
+    GetUserProfile = Environ("USERPROFILE")
+End Function
+
+Public Property Get TestFilePath() As String
+    TestFilePath = GetUserProfile & SUB_FOLDER & TEST_FILE
+End Property
+Public Property Get csvPath() As String
+Dim i_day As Long
+ i_day = Replace(Date, "/", "")
+    csvPath = GetUserProfile & SUB_FOLDER & "\" & i_day & TEST_FILE
+End Property
+Option Explicit
+'CPaintResultRepository
+Private m_db As CDatabaseConnection
+
+Public Sub Init(ByVal db As CDatabaseConnection)
+    Set m_db = db
+End Sub
+
+Public Function GetPaintResult(ByVal targetDate As Date, _
+                               ByVal kinmuType As Long) As ADODB.Recordset
+
+    Dim sql As String
+    Dim rs As New ADODB.Recordset
+    
+    sql = _
+        "SELECT おろし日付, 勤務, 品番, Count(*) AS 数量 " & _
+        "FROM 塗装出来高 " & _
+        "WHERE おろし日付 = #" & Format(targetDate, "yyyy/mm/dd") & "# " & _
+        "AND 勤務 = " & kinmuType & " " & _
+        "GROUP BY おろし日付, 勤務, 品番 " & _
+        "ORDER BY 品番;"
+    
+    rs.Open sql, m_db.Connection, adOpenForwardOnly, adLockReadOnly
+    
+    Set GetPaintResult = rs
+    
+End Function
+Public Function ExistsKanriNo(ByVal hikaku As String) As Boolean
+
+    Dim rs As New ADODB.Recordset
+    Dim sql As String
+    
+    sql = "SELECT 1 FROM 塗装出来高 " & _
+          "WHERE 品番 = '" & hikaku & "';"
+    
+    rs.Open sql, m_db.Connection, adOpenForwardOnly, adLockReadOnly
+    
+    ExistsKanriNo = Not rs.EOF
+    
+    rs.Close
+    Set rs = Nothing
+
+End Function
+
+Public Function cho(ByVal location As String) As ADODB.Recordset
+ Dim sql As String
+    Dim rs As New ADODB.Recordset
+            sql = "SELECT TOP 1 1 " & _
+                    "FROM ロケーション " & _
+                    "WHERE 出荷フラグ = 1 " & _
+                    "AND ロケーション = '" & Replace(location, "'", "''") & "';"
+            
+            rs.Open sql, m_db.Connection, adOpenForwardOnly, adLockReadOnly
+            
+    Set cho = rs
+End Function
+
+Public Sub SetConnection(ByVal db As CDatabaseConnection)
+    Set m_db = db
+End Sub
+
+Public Function ExistsShukkaLocation(ByVal location As String) As Boolean
+    
+    Dim rs As ADODB.Recordset
+    Dim sql As String
+    
+    sql = "SELECT COUNT(*) " & _
+          "FROM ロケーション " & _
+          "WHERE 出荷フラグ = 1 " & _
+          "AND ロケーション = '" & Replace(location, "'", "''") & "';"
+    
+    Set rs = New ADODB.Recordset
+    rs.Open sql, m_db.Connection, adOpenForwardOnly, adLockReadOnly
+    
+    ExistsShukkaLocation = (rs.Fields(0).value > 0)
+    
+    rs.Close
+    Set rs = Nothing
+    
+End Function
+Option Explicit
+'CPaintResultService
+Private m_repo As CPaintResultRepository
+Private m_db As CDatabaseConnection
+
+Public Sub Init(ByVal dbPath As String)
+
+    Set m_db = New CDatabaseConnection
+    m_db.OpenDB dbPath
+    
+    Set m_repo = New CPaintResultRepository
+    m_repo.Init m_db
+    
+End Sub
+
+Public Sub OutputPaintResult(ByVal targetDate As Date, _
+                             ByVal kinmuType As Long, _
+                             ByVal ws As Worksheet)
+
+    Dim rs As ADODB.Recordset
+    Dim i As Long
+    Set rs = m_repo.GetPaintResult(targetDate, kinmuType)
+    
+    If rs.EOF Then
+        
+        MsgBox Format(targetDate, "yyyy/mm/dd") & " の計画はありません。"
+        
+    Else
+        
+        ws.Rows("3:" & ws.Rows.Count).ClearContents
+    
+        For i = 0 To rs.Fields.Count - 1
+            ws.Cells(3, i + 1).value = rs.Fields(i).Name
+        Next i
+            
+        ws.Range("A4").CopyFromRecordset rs
+        
+    End If
+    
+    rs.Close
+    m_db.CloseDB
+    
+End Sub
+
+Public Function ExistsKanriNo(ByVal hikaku As String) As Boolean
+
+    ExistsKanriNo = m_repo.ExistsKanriNo(hikaku)
+
+End Function
+
+Public Sub Initia(ByVal repo As CPaintResultRepository)
+    Set m_repo = repo
+End Sub
+
+Public Sub LocationDuplication(ByVal ws As Worksheet)
+
+    Dim i As Long, lastRow As Long
+    Dim location As String
+    
+    lastRow = ws.Cells(ws.Rows.Count, 5).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        
+        location = Trim(ws.Cells(i, "E").value)
+        
+        If location <> "" Then
+            
+            If m_repo.ExistsShukkaLocation(location) Then
+                ws.Cells(i, "I").value = "NG"
+            Else
+                ws.Cells(i, "I").value = "空"
+            End If
+            
+        Else
+            ws.Cells(i, "I").value = ""
+        End If
+        
+    Next i
+    
+End Sub
+
+Option Explicit
+'CDatabaseConnection
+Private mConn As ADODB.Connection
+Private Const MAX_RETRY As Long = 3
+Private Const PROVIDER_NAME As String = "Microsoft.ACE.OLEDB.12.0"
+
+Public Function TryOpenConnection(ByVal dbPath As String, _
+                     Optional ByVal showMessage As Boolean = False) As Boolean
+
+    Dim retry As Long
+    
+    For retry = 1 To MAX_RETRY
+    
+        On Error Resume Next
+        
+        If mConn Is Nothing Then
+            Set mConn = New ADODB.Connection
+            mConn.Provider = PROVIDER_NAME
+        End If
+        
+        If mConn.State <> adStateOpen Then
+            mConn.Open dbPath
+        End If
+        
+        If Err.Number = 0 And mConn.State = adStateOpen Then
+            TryOpenConnection = True
+            On Error GoTo 0
+            Exit Function
+        End If
+        
+        Err.Clear
+        On Error GoTo 0
+        DoEvents
+        
+    Next retry
+    
+    If showMessage Then
+        MsgBox "DB connection failed.", vbCritical
+    End If
+    
+End Function
+Public Sub OpenDB(ByVal dbPath As String)
+
+    Set mConn = New ADODB.Connection
+    mConn.Provider = PROVIDER_NAME
+    mConn.Open dbPath
+
+End Sub
+
+Public Property Get Connection() As ADODB.Connection
+    Set Connection = mConn
+End Property
+
+Public Sub CloseDB()
+
+    If Not mConn Is Nothing Then
+        If mConn.State = adStateOpen Then mConn.Close
+    End If
+    
+    Set mConn = Nothing
+
+End Sub
+
+
+Option Explicit
+'CDatabaseCommand
+Private mCmd As ADODB.Command
+
+Public Sub Init(ByVal conn As ADODB.Connection, ByVal sql As String)
+
+    Set mCmd = New ADODB.Command
+    Set mCmd.ActiveConnection = conn
+    mCmd.CommandText = sql
+    mCmd.CommandType = adCmdText
+
+End Sub
+
+Public Sub AddDateParam(ByVal value As Date)
+
+    mCmd.Parameters.Append _
+        mCmd.CreateParameter( _
+            Name:="p1", _
+            Type:=adDate, _
+            Direction:=adParamInput, _
+            value:=value)
+
+End Sub
+
+Public Function ExecuteRS() As ADODB.Recordset
+
+    Dim rs As New ADODB.Recordset
+    rs.Open mCmd, , adOpenForwardOnly, adLockReadOnly
+    Set ExecuteRS = rs
+
+End Function
+
+Public Sub AddParam(ByVal value As Variant)
+
+    mCmd.Parameters.Append _
+        mCmd.CreateParameter( _
+            Type:=adVariant, _
+            Direction:=adParamInput, _
+            value:=value)
+
+End Sub
+
+
+Public Sub ExecuteNonQuery()
+    mCmd.Execute
+End Sub
+
+Option Explicit
+'CDatabaseTransaction
+Private mConn As ADODB.Connection
+
+Public Sub Init(ByVal conn As ADODB.Connection)
+    Set mConn = conn
+End Sub
+
+Public Sub BeginTrans()
+    mConn.BeginTrans
+End Sub
+
+Public Sub Commit()
+    mConn.CommitTrans
+End Sub
+
+Public Sub Rollback()
+    mConn.RollbackTrans
+End Sub
+
+
+
