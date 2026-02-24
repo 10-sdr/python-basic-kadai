@@ -1,0 +1,158 @@
+Option Explicit
+
+Public Sub 出荷依頼登録_実行()
+
+    Dim service As New CShipmentService '業務実行ロジック
+    service.RegisterShipments
+
+End Sub
+
+
+Public Function SQL_ShipmentInsert() As String
+
+    SQL_ShipmentInsert = _
+        "INSERT INTO 出荷 (" & _
+        "管理番号, 品番, 出荷日, 機種, 部位, 区分, ロケーション, key品番" & _
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+
+End Function
+
+
+
+Public Function CleanHinban(ByVal txt As String) As String
+    
+    If Trim(txt) = "" Then
+        CleanHinban = ""
+        Exit Function
+    End If
+    
+    ' 前後空白除去（内部スペースは残す）
+    txt = Trim(txt)
+    
+    ' 改行・タブ除去
+    txt = Replace(txt, vbCr, "")
+    txt = Replace(txt, vbLf, "")
+    txt = Replace(txt, vbTab, "")
+    
+    ' 半角＋大文字
+    txt = StrConv(txt, vbUpperCase + vbNarrow)
+    
+    ' 全角スペース → 半角スペース
+    txt = Replace(txt, "　", " ")
+    
+    ' ハイフン統一
+    txt = Replace(txt, "‐", "-")
+    txt = Replace(txt, "－", "-")
+    txt = Replace(txt, "―", "-")
+    txt = Replace(txt, "ー", "-")
+    txt = Replace(txt, "ｰ", "-")
+    
+    CleanHinban = txt
+
+End Function
+Sub 品番クリーニング実行()
+
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim arr As Variant
+    Dim i As Long
+    
+    Set ws = ActiveSheet
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    
+    arr = ws.Range("B2:B" & lastRow).value
+    
+    For i = 1 To UBound(arr, 1)
+        arr(i, 1) = CleanHinban(arr(i, 1))
+    Next i
+    
+    ws.Range("B2:B" & lastRow).value = arr
+
+End Sub
+
+Sub 塗装出来高() '1-1
+
+Dim myConn As ADODB.Connection
+Dim myRS As ADODB.Recordset
+Dim fSql As String, get_dbPath As String
+Dim dbConn As New CDatabaseConnection
+
+get_dbPath = "C:\Users\bqkyp\OneDrive\デスクトップ\Ver_test\classTest\第一組立出来高.accdb"
+If Not dbConn.TryOpenConnection(get_dbPath, True) Then GoTo exitpoint
+
+Set myConn = New ADODB.Connection 'データ ソースへの接続
+myConn.Provider = "Microsoft.ACE.OLEDB.12.0" 'Accessへ接続プロバイダ名
+myConn.Open get_dbPath
+
+Dim targetDate As Date
+Dim kinmuType As Long
+
+targetDate = Range("B1").value
+kinmuType = Range("B2").value   ' 例：2 = 夜勤
+
+fSql = "SELECT おろし日付, 勤務, 品番, Count(*) AS 数量 " & _
+      "FROM 塗装出来高 " & _
+      "WHERE おろし日付 = #" & Format(targetDate, "yyyy/mm/dd") & "# " & _
+      "AND 勤務 = " & kinmuType & " " & _
+      "GROUP BY おろし日付, 勤務, 品番 " & _
+      "ORDER BY 品番;"
+      
+Set myRS = New ADODB.Recordset 'レコードセットへの接続
+myRS.Open fSql, myConn, adOpenKeyset, adLockPessimistic 'クエリーの実行2
+
+If myRS.EOF Then
+    MsgBox "" & targetDate & "の計画はありません。"
+Else
+    With Sheets(2)
+    .Rows("4:" & .Rows.Count).ClearContents
+    .Range("A4").CopyFromRecordset myRS
+    End With
+End If
+
+myRS.Close: Set myRS = Nothing
+myConn.Close: Set myConn = Nothing
+Exit Sub
+
+exitpoint:
+dbConn.CloseDB
+
+
+End Sub
+Sub 塗装出来高フレーム() '1-1
+
+    Dim service As New CPaintResultService
+    Dim targetDate As Date
+    Dim kinmuType As Long
+    
+    targetDate = Sheets(2).Range("B1").value
+    kinmuType = Sheets(2).Range("B2").value
+    
+    service.Init "C:\Users\bqkyp\OneDrive\デスクトップ\Ver_test\classTest\第一組立出来高.accdb"
+    
+    service.OutputPaintResult _
+        targetDate, _
+        kinmuType, _
+        Sheets(2)
+
+End Sub
+Sub 管理番号重複チェック()
+If check Then
+    '処理
+    Debug.Print "treu"
+End If
+End Sub
+Function check() As Boolean
+    Dim service As New CPaintResultService
+    Dim hikaku As String
+    
+    hikaku = "707H1X1440"
+    
+    service.Init "C:\Users\bqkyp\OneDrive\デスクトップ\Ver_test\classTest\第一組立出来高.accdb"
+    
+    If service.ExistsKanriNo(hikaku) Then
+        check = True
+    Else
+        check = False
+    End If
+    
+End Function
