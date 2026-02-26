@@ -1,0 +1,220 @@
+'========================================
+' 汎用ヘッダー設定
+' startCol : 開始列（例 1 = A列）
+' headers  : ヘッダー配列
+'========================================
+Public Sub SetHeader(ByVal ws As Worksheet, _
+                     ByVal startCol As Long, _
+                     ByVal headers As Variant)
+
+    Dim i As Long
+    
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, startCol + i).value = headers(i)
+    Next i
+
+End Sub
+
+Sub Test1()
+
+    Dim arr As Variant
+    arr = Array("日付", "品番", "", "", "判定")
+    
+    Call SetHeader(ThisWorkbook.Worksheets("free"), 1, arr)
+
+End Sub
+Sub Test2()
+
+    Dim arr As Variant, ws As Worksheet
+    
+    Set ws = ThisWorkbook.Worksheets("jj")
+    ws.Rows(1).ClearContents
+    arr = Array("ロット", "数量", "単価", "金額")
+    
+    Call SetHeader(ws, 1, arr)
+
+End Sub
+Sub 入庫チェック実行()
+
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim dict As Object
+    Dim i As Long
+    Dim key As String
+    
+    Set ws = ThisWorkbook.Worksheets("free")
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    If lastRow < 2 Then Exit Sub
+    
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    '=========================
+    ' ① シート内重複チェック
+    '=========================
+    For i = 2 To lastRow
+        
+        key = Trim(ws.Cells(i, "F").value)
+              
+        If Len(ws.Cells(i, "F").value) <= 12 Then
+            ws.Cells(i, "H").value = "NG(品番短い)"
+            ws.Cells(i, "J").value = "error"
+        ElseIf dict.Exists(key) Then
+            ws.Cells(i, "H").value = "ダブりありNG"
+            ws.Cells(i, "J").value = "error"
+        Else
+            dict.Add key, True
+            ws.Cells(i, "H").value = "ダブりなしOK"
+        End If
+        
+    Next i
+    
+    '=========================
+    ' ② Access側チェック
+    '=========================
+    
+    ロケーションチェック
+    
+End Sub
+Sub ロケーションチェック()
+'dbにフラグfilde　trueが在庫
+ Dim db As New CDatabaseConnection
+ Dim ws As Worksheet
+ Set ws = ThisWorkbook.Worksheets("free")
+    db.OpenDB "E:\ロケーション\ロケーション\REMN.accdb"
+    
+    Dim repo As New CPaintResultRepository
+    repo.SetConnection db
+    
+    Dim service As New CPaintResultService
+    service.Initia repo
+    
+    service.LocationDuplication ws
+    
+    db.CloseDB
+
+End Sub
+Sub ロケ登録()
+
+    Dim db As New CDatabaseConnection
+    db.OpenDB "E:\ロケーション\ロケーション\REMN.accdb"
+    
+    Dim repo As New CPaintResultRepository
+    repo.SetConnection db
+    
+    Dim service As New CPaintResultService
+    service.Initlaize repo, db
+    
+    service.TransferNyuko Sheets("free")
+    
+    db.CloseDB
+    
+    MsgBox "処理完了"
+
+End Sub
+##########################
+CPaintResultService
+Public Sub LocationDuplication(ByVal ws As Worksheet)
+
+    Dim i As Long, lastRow As Long
+    Dim location As String, itemID As String
+    
+    lastRow = ws.Cells(ws.Rows.Count, 5).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        
+        location = Trim(ws.Cells(i, "E").value)
+        itemID = Trim(ws.Cells(i, "F").value)
+        
+        If location <> "" Then
+            
+            If m_repo.ExistsShukkaLocation(location) Then
+                ws.Cells(i, "I").value = "満室NG"
+                ws.Cells(i, "J").value = "error"
+            Else
+                ws.Cells(i, "I").value = "空部屋"
+            End If
+            
+        Else
+            ws.Cells(i, "I").value = ""
+        End If
+        
+        If itemID <> "" Then
+            
+            If Not m_repo.ExistsItemID(itemID) Then
+                ws.Cells(i, "K").value = "品番なし"
+                ws.Cells(i, "J").value = "error"
+            Else
+                ws.Cells(i, "K").value = "品番OK"
+            End If
+            
+        Else
+            ws.Cells(i, "K").value = ""
+        End If
+        
+    Next i
+    
+End Sub
+
+repo
+###########################
+Private Function ExistsByField( _
+        ByVal fieldName As String, _
+        ByVal fieldValue As String) As Boolean
+
+    Dim cmd As ADODB.Command
+    Dim rs  As ADODB.Recordset
+    
+    Set cmd = New ADODB.Command
+    
+    With cmd
+        .ActiveConnection = m_db.Connection
+        .CommandType = adCmdText
+        .CommandText = _
+            "SELECT 1 FROM ロケーション " & _
+            "WHERE 在庫flag <> 0 " & _
+            "AND [" & fieldName & "] = ?;"
+        
+        .Parameters.Append .CreateParameter("", adVarChar, adParamInput, 255, fieldValue)
+        
+    End With
+'    mCmd.Parameters.Append _
+'        mCmd.CreateParameter( _
+'            Name:="p1", _
+'            Type:=adDate, _
+'            Direction:=adParamInput, _
+'            value:=value)
+
+    Set rs = cmd.Execute
+    
+    ExistsByField = Not rs.EOF
+    
+    rs.Close
+    Set rs = Nothing
+    Set cmd = Nothing
+
+End Function
+
+
+'====================================================
+' 出荷ロケーション存在確認
+'====================================================
+Public Function ExistsShukkaLocation( _
+        ByVal location As String) As Boolean
+
+    ExistsShukkaLocation = _
+        ExistsByField("ロケーション", location)
+
+End Function
+
+
+'====================================================
+' 品番存在確認
+'====================================================
+Public Function ExistsItemID( _
+        ByVal itemID As String) As Boolean
+
+    ExistsItemID = _
+        ExistsByField("品番", itemID)
+
+End Function
