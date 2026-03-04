@@ -1,0 +1,994 @@
+Option Explicit
+'main
+Public Enum ImportKind
+    IK_Location = 1
+    IK_Delivery = 2
+    IK_Shipment = 3
+End Enum
+Public Sub RunImport(ByVal kind As ImportKind)
+    Dim config As CImportConfig
+    Dim service As CCsvImportService
+    
+    Set config = New CImportConfig
+    config.Initialize kind
+    
+    Set service = New CCsvImportService
+    service.Initialize config
+
+    service.Execute
+
+End Sub
+
+Sub ImportLocation()
+    RunImport IK_Location
+End Sub
+
+Sub ImportDelivery()
+    RunImport IK_Delivery
+End Sub
+
+Sub ImportShipment()
+    RunImport IK_Shipment
+End Sub
+###########################################################
+Option Explicit
+'RegistrationLocation
+Sub 入庫チェック実行(ws As Worksheet)
+
+    Dim lastRow As Long
+    Dim dict As Object
+    Dim i As Long
+    Dim key As String
+    
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    If lastRow < 2 Then Exit Sub
+    
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    '=========================
+    ' ① シート内重複チェック
+    '=========================
+    For i = 2 To lastRow
+        
+        key = Trim(ws.Cells(i, "F").value)
+        ws.Cells(i, "H").value = "OK"
+              
+        If Len(ws.Cells(i, "F").value) <= 12 Then
+            ws.Cells(i, "K").value = "NG(品番短い)"
+            ws.Cells(i, "H").value = "error"
+        ElseIf dict.Exists(key) Then
+            ws.Cells(i, "K").value = "ダブりありNG"
+            ws.Cells(i, "H").value = "error"
+        Else
+            dict.Add key, True
+            ws.Cells(i, "K").value = "ダブりなしOK"
+        End If
+        
+    Next i
+    
+    
+    '=========================
+    ' ② Access側チェック
+    '=========================
+    
+    ロケーションチェック
+    
+End Sub
+Sub ロケーションチェック()
+
+    Dim db As New CDatabaseConnection
+    Dim pathMager As New clsPathManager
+    
+    db.OpenDB pathMager.accdbPath
+
+    Dim repo As New clsLocationRepository
+    repo.SetConnection db
+
+    Dim service As New clsLocationService
+    service.Initialize repo
+
+    service.LocationDuplication Sheets("free")
+
+    db.CloseDB
+
+End Sub
+Sub ロケ登録()
+
+    Dim pathManager As New clsPathManager
+    Dim service As New clsLocationService
+
+    service.InitializeByPath pathManager.accdbPath
+
+    service.TransferNyuko Sheets("free")
+
+    service.Terminate
+
+    MsgBox "処理完了"
+
+End Sub
+###########################################
+'registerDelivery
+Sub 納入チェック()
+Dim i As Long, jj As Long, C_t As String, co_t As String, k_t As String, c_t1 As String
+Dim ws As Worksheet
+
+Set ws = ThisWorkbook.Worksheets("free")
+
+For i = 2 To lastRow(ws, 1)
+
+    ws.Cells(i, 8).value = Format(ws.Cells(i, 1).value, "yyyymmdd") & "00"
+    ws.Cells(i, 5).value = Mid(ws.Cells(i, 5).value, 1, 10)
+    C_t = ws.Cells(i, 5).value
+    
+    If Len(C_t) <> 10 Then
+        ws.Cells(i, 9).value = "NG"
+        ws.Cells(i, 11).value = "error"
+    End If
+    
+    ws.Cells(i, 12).value = C_t & ws.Cells(i, 7).value & ws.Cells(i, 8).value
+    ws.Cells(i, 15).value = isExternalProduct(ws.Cells(i, 5).value)
+Next i
+
+End Sub
+
+
+Function isExternalProduct(ByVal targetValue As String) As Boolean
+    
+    Static dict As Object
+    Dim wsList As Worksheet
+    Dim lastRow As Long
+    Dim arr
+    Dim i As Long
+    
+    ' 初回だけDictionary作成
+    If dict Is Nothing Then
+        
+        Set dict = CreateObject("Scripting.Dictionary")
+        Set wsList = ThisWorkbook.Worksheets("10桁品番")
+        
+        lastRow = wsList.Cells(wsList.Rows.Count, 1).End(xlUp).Row
+        arr = wsList.Range("A1:A" & lastRow).value
+        
+        For i = 1 To UBound(arr, 1)
+            If arr(i, 1) <> "" Then
+                dict(arr(i, 1)) = True
+            End If
+        Next
+        
+    End If
+    
+    ' 存在しないなら True
+    isExternalProduct = Not dict.Exists(targetValue)
+    
+End Function
+#############################################
+Option Explicit
+'func
+Public Const CHECK_EXCEL_PATH As String = "C:\Users\user\tesx.xlsm"
+Public Function get_userprofile()
+    get_userprofile = Environ("userprofile")
+End Function
+
+Function IsNetworkAvailable(testPath As String) As Boolean
+    On Error Resume Next
+    IsNetworkAvailable = (Dir(testPath) <> "")
+    On Error GoTo 0
+End Function
+
+Public Function GetDbPath() As String
+    
+    GetDbPath = Environ("userprofile") & _
+             ThisWorkbook.Worksheets("path").Range("C3").value & "\REMN.accdb"
+
+End Function
+
+'==========================
+' ファイル存在確認
+'==========================
+Public Function FileExists(ByVal filePath As String) As Boolean
+    FileExists = (Dir(filePath) <> "")
+End Function
+Public Function GetCheckExcelPath() As String
+    GetCheckExcelPath = Environ("USERPROFILE") & "\tesx.xlsm"
+End Function
+
+'========================================
+' 汎用ヘッダー設定
+' startCol : 開始列（例 1 = A列）
+' headers  : ヘッダー配列
+'========================================
+Public Sub SetHeader(ByVal ws As Worksheet, _
+                     ByVal startCol As Long, _
+                     ByVal headers As Variant)
+
+    Dim i As Long
+    
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, startCol + i).value = headers(i)
+    Next i
+
+End Sub
+
+Sub LocaRegiHeader(ws As Worksheet)
+
+    Dim arr As Variant
+    arr = Array("日付", "", "", "", "ロケ", "品番", "", "判定", "状況", "品番", "重複")
+    
+    Call SetHeader(ws, 1, arr)
+
+End Sub
+Sub 納入Header(ws As Worksheet)
+
+    Dim arr As Variant
+    arr = Array("日付", "", "", "", "品番", "ロケ", "", "", "判定")
+    
+    Call SetHeader(ws, 1, arr)
+
+End Sub
+
+Public Function lastRow(ByVal ws As Worksheet, _
+                              ByVal Col As Long) As Long
+
+    If Application.WorksheetFunction.CountA(ws.Columns(Col)) = 0 Then
+        lastRow = 1
+    Else
+        lastRow = ws.Cells(ws.Rows.Count, Col).End(xlUp).Row
+    End If
+
+End Function
+
+####################################################
+'CCsvImportService
+Private m_config As CImportConfig
+Private m_fileChecker As clsFileChecker
+Private m_db As CDatabaseConnection
+
+Public Sub Initialize(ByVal config As CImportConfig)
+
+    Set m_config = config
+    Set m_fileChecker = New clsFileChecker
+    Set m_db = New CDatabaseConnection
+
+End Sub
+
+Public Sub Execute()
+
+    Dim ws As Worksheet
+    Dim filePath As String, db_Path As String
+    Dim m_path As New clsPathManager
+    
+'    On Error GoTo ErrHandler
+    
+    Set ws = ThisWorkbook.Worksheets("free")
+    
+    filePath = m_config.GetFilePath
+    db_Path = m_path.accdbPath
+    
+    If Not m_fileChecker.TryCheck(filePath, True) Then Exit Sub
+    If Not m_db.TryOpenConnection(db_Path, True) Then GoTo Cleanup
+    
+    ReadCsv filePath, ws
+    
+    m_config.ExecuteAfterImport ws
+    
+Cleanup:
+    m_db.CloseDB
+    Exit Sub
+
+ErrHandler:
+    MsgBox "CSV取込エラー：" & Err.Description, vbExclamation
+    Resume Cleanup
+
+End Sub
+
+
+'Private Sub ReadCsv(ByVal filePath As String, ByVal ws As Worksheet)
+'
+'    Dim buf As String
+'    Dim tmp As Variant
+'    Dim i As Long, j As Long
+'
+'    ws.Rows.Clear
+''    Call LocaRegiHeader(ws)
+'
+'    With CreateObject("ADODB.Stream")
+'        .Charset = "UTF-8"
+'        .Open
+'        .LoadFromFile filePath
+'
+'        Do Until .EOS
+'            buf = .ReadText(-2)
+'            i = i + 1
+'            tmp = Split(buf, ",")
+'
+'            For j = 0 To UBound(tmp)
+'                ws.Cells(i + 1, j + 1).value = tmp(j)
+'            Next j
+'        Loop
+'
+'        .Close
+'    End With
+'
+'End Sub
+
+Private Sub ReadCsv(ByVal filePath As String, ByVal ws As Worksheet)
+
+    Dim stm As ADODB.Stream
+    Dim lines As Variant
+    Dim cols As Variant
+    Dim i As Long, j As Long
+
+    ws.Cells.Clear
+
+    Set stm = New ADODB.Stream
+
+    With stm
+        .Charset = "UTF-8"
+        .Open
+        .LoadFromFile filePath
+
+        lines = Split(.ReadText, vbCrLf)
+
+        For i = 0 To UBound(lines)
+
+            If Trim(lines(i)) <> "" Then
+
+                cols = Split(lines(i), ",")
+
+                For j = 0 To UBound(cols)
+                    ws.Cells(i + 2, j + 1).value = cols(j)
+                Next j
+
+            End If
+
+        Next i
+
+        .Close
+    End With
+
+    Set stm = Nothing
+
+End Sub
+##########################################
+'CImportConfig
+Private m_kind As ImportKind
+
+Public Sub Initialize(ByVal kind As ImportKind)
+    m_kind = kind
+End Sub
+
+Public Function GetFilePath() As String
+
+    Dim basePath As String
+    Dim fileName As String
+    Dim todayStr As String
+    Dim path_ma As New clsPathManager
+    
+    todayStr = Format(Date, "yyyymmdd")
+    
+    Select Case m_kind
+    
+        Case IK_Location
+                path_ma.SetFileType IK_Location
+                GetFilePath = path_ma.CsvPath
+
+        Case IK_Delivery
+                path_ma.SetFileType IK_Delivery
+                GetFilePath = path_ma.CsvPath
+            
+        Case IK_Shipment
+            basePath = "E:\ロケーション\"
+            fileName = todayStr & "_RetrievalLog.csv"
+            
+        Case Else
+            Err.Raise 9999, , "未定義のImportKindです"
+            
+    End Select
+    
+
+End Function
+
+
+Public Sub ExecuteAfterImport(ByVal ws As Worksheet)
+
+    Select Case m_kind
+    
+        Case IK_Location
+            Call LocaRegiHeader(ws)
+
+            Call 入庫チェック実行(ws)
+                ShowImportForm IK_Location
+
+            
+        Case IK_Delivery
+            Call 納入Header(ws)
+
+'            納入チェック
+'
+'        Case IK_Shipment
+'            出荷チェック実行
+            
+    End Select
+
+End Sub
+####################################
+'==== CListViewConfig ====
+
+Private m_kind As ImportKind
+
+Public Sub Initialize(ByVal kind As ImportKind)
+    m_kind = kind
+End Sub
+
+Public Property Get SheetName() As String
+
+    Select Case m_kind
+        Case IK_Location: SheetName = "入庫"
+        Case IK_Delivery: SheetName = "納入"
+        Case IK_Shipment: SheetName = "出荷"
+    End Select
+
+End Property
+
+
+Public Property Get TitleText() As String
+
+    Select Case m_kind
+        Case IK_Location: TitleText = Date & " 入庫"
+        Case IK_Delivery: TitleText = Date & " 納入"
+        Case IK_Shipment: TitleText = Date & " 出荷"
+    End Select
+
+End Property
+
+
+Public Property Get ColumnWidths() As String
+
+    Select Case m_kind
+        Case IK_Location
+            ColumnWidths = "100;100;0;0;80;350;0;95;95;95;95;95;95"
+        Case IK_Delivery
+            ColumnWidths = "80;120;80;300;100;100"
+        Case IK_Shipment
+            ColumnWidths = "100;100;100;200;100"
+    End Select
+
+End Property
+#########################################
+'clsLocationRepository
+Private m_db As CDatabaseConnection
+
+Public Sub Initialize(ByVal db As CDatabaseConnection)
+    Set m_db = db
+End Sub
+
+Public Sub UpdateNyuko( _
+        ByVal hinban As String, _
+        ByVal location As String, _
+        ByVal nyukoDate As Date, _
+        ByVal nyukoTime As Date, _
+        ByVal worker As String)
+
+    Dim cmd As ADODB.Command
+    Set cmd = New ADODB.Command
+    
+    With cmd
+        .ActiveConnection = m_db.Connection
+        .CommandText = _
+            "UPDATE ロケーション SET " & _
+            "ロケーション = ?, " & _
+            "入庫日 = ?, " & _
+            "入庫時間 = ?, " & _
+            "入庫作業者 = ? " & _
+            "WHERE 品番 = ?;"
+        .CommandType = adCmdText
+        
+        .Parameters.Append .CreateParameter(, adVarWChar, adParamInput, 50, location)
+        .Parameters.Append .CreateParameter(, adDate, adParamInput, , nyukoDate)
+        .Parameters.Append .CreateParameter(, adDate, adParamInput, , nyukoTime)
+        .Parameters.Append .CreateParameter(, adVarWChar, adParamInput, 50, worker)
+        .Parameters.Append .CreateParameter(, adVarWChar, adParamInput, 50, hinban)
+        
+        .Execute
+    End With
+End Sub
+Public Sub SetConnection(ByVal db As CDatabaseConnection)
+    Set m_db = db
+End Sub
+
+'====================================================
+' 在庫存在チェック共通メソッド
+'====================================================
+Private Function ExistsByField( _
+        ByVal fieldName As String, _
+        ByVal fieldValue As String) As Boolean
+
+    Dim cmd As ADODB.Command
+    Dim rs  As ADODB.Recordset
+    
+    Set cmd = New ADODB.Command
+    
+    With cmd
+        .ActiveConnection = m_db.Connection
+        .CommandType = adCmdText
+        .CommandText = _
+            "SELECT 1 FROM ロケーション " & _
+            "WHERE 在庫flag <> 0 " & _
+            "AND [" & fieldName & "] = ?;"
+        
+        .Parameters.Append .CreateParameter("", adVarChar, adParamInput, 255, fieldValue)
+        
+    End With
+'    mCmd.Parameters.Append _
+'        mCmd.CreateParameter( _
+'            Name:="p1", _
+'            Type:=adDate, _
+'            Direction:=adParamInput, _
+'            value:=value)
+
+    Set rs = cmd.Execute
+    
+    ExistsByField = Not rs.EOF
+    
+    rs.Close
+    Set rs = Nothing
+    Set cmd = Nothing
+
+End Function
+
+
+'====================================================
+' 出荷ロケーション存在確認
+'====================================================
+Public Function ExistsShukkaLocation( _
+        ByVal location As String) As Boolean
+
+    ExistsShukkaLocation = _
+        ExistsByField("ロケーション", location)
+
+End Function
+
+
+'====================================================
+' 品番存在確認
+'====================================================
+Public Function ExistsItemID( _
+        ByVal itemID As String) As Boolean
+
+    ExistsItemID = _
+        ExistsByField("品番", itemID)
+
+End Function
+
+######################################
+' ===== clsLocationService =====
+' clsLocationService
+Private m_repo As clsLocationRepository
+Private m_db As CDatabaseConnection
+
+Public Sub Initialize(ByVal repo As clsLocationRepository)
+    Set m_repo = repo
+End Sub
+'-----------------------------
+' DBパスから初期化（内部生成）
+'-----------------------------
+Public Sub InitializeByPath(ByVal dbPath As String)
+
+    Dim db As New CDatabaseConnection
+    db.OpenDB dbPath
+
+    Set m_repo = New clsLocationRepository
+    m_repo.SetConnection db
+
+    Set m_db = db   ' ← Terminate用に保持
+
+End Sub
+'Private m_repo As clsLocationRepository
+'Private m_db As CDatabaseConnection
+'
+''-----------------------------
+'' 初期化（接続込み）
+''-----------------------------
+'Public Sub Initialize(ByVal dbPath As String)
+'
+'    Set m_db = New CDatabaseConnection
+'    m_db.OpenDB dbPath
+'
+'    Set m_repo = New clsLocationRepository
+'    m_repo.Initialize m_db   ' ← repoも統一命名
+'
+'End Sub
+'
+'-----------------------------
+' 終了処理
+'-----------------------------
+Public Sub Terminate()
+
+    If Not m_db Is Nothing Then
+        m_db.CloseDB
+    End If
+
+End Sub
+
+'-----------------------------
+' 塗装結果出力
+'-----------------------------
+Public Sub OutputPaintResult( _
+        ByVal targetDate As Date, _
+        ByVal kinmuType As Long, _
+        ByVal ws As Worksheet)
+
+    Dim rs As ADODB.Recordset
+    Dim i As Long
+
+    Set rs = m_repo.GetPaintResult(targetDate, kinmuType)
+
+    If rs.EOF Then
+        MsgBox Format(targetDate, "yyyy/mm/dd") & " の計画はありません。"
+        GoTo ExitProc
+    End If
+
+    ws.Rows("3:" & ws.Rows.Count).ClearContents
+
+    For i = 0 To rs.Fields.Count - 1
+        ws.Cells(3, i + 1).value = rs.Fields(i).Name
+    Next i
+
+    ws.Range("A4").CopyFromRecordset rs
+
+ExitProc:
+    If Not rs Is Nothing Then
+        If rs.State = adStateOpen Then rs.Close
+    End If
+
+End Sub
+
+'-----------------------------
+' 管理番号存在確認
+'-----------------------------
+Public Function ExistsKanriNo(ByVal hikaku As String) As Boolean
+    ExistsKanriNo = m_repo.ExistsKanriNo(hikaku)
+End Function
+
+'-----------------------------
+' ロケ重複チェック
+'-----------------------------
+Public Sub LocationDuplication(ByVal ws As Worksheet)
+
+    Dim i As Long, lastRow As Long
+    Dim location As String, itemID As String
+    Dim firstChar As String
+
+    lastRow = ws.Cells(ws.Rows.Count, 5).End(xlUp).Row
+
+    For i = 2 To lastRow
+
+        location = Trim(ws.Cells(i, "E").value)
+        itemID = Trim(ws.Cells(i, "F").value)
+
+        '------------------------
+        ' ロケーションチェック
+        '------------------------
+        If Len(location) > 0 Then
+
+            firstChar = UCase$(Left$(location, 1))
+
+            Select Case firstChar
+                Case "1", "2", "3", "4", _
+                     "B", "C", "D", "E", _
+                     "X", "Y", "Z"
+
+                    If m_repo.ExistsShukkaLocation(location) Then
+                        ws.Cells(i, "I").value = "満室NG"
+                        ws.Cells(i, "H").value = "error"
+                    Else
+                        ws.Cells(i, "I").value = "空室"
+                    End If
+
+                Case Else
+                    ws.Cells(i, "I").value = "FREE"
+            End Select
+
+        End If
+
+        '------------------------
+        ' 品番チェック
+        '------------------------
+        If itemID <> "" Then
+
+            If Not m_repo.ExistsItemID(itemID) Then
+                ws.Cells(i, "J").value = "品番なし"
+                ws.Cells(i, "K").value = "error"
+            Else
+                ws.Cells(i, "J").value = "品番OK"
+            End If
+
+        End If
+
+    Next i
+
+End Sub
+
+'-----------------------------
+' 入庫転送（トランザクション）
+'-----------------------------
+Public Sub TransferNyuko(ByVal ws As Worksheet)
+
+    Dim i As Long, lastRow As Long
+    Dim dbTran As New CDatabaseTransaction
+
+    On Error GoTo ErrHandler
+
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    dbTran.Initialize m_db.Connection
+    dbTran.BeginTrans
+
+    For i = 2 To lastRow
+
+        If ws.Cells(i, 8).value <> "error" Then
+
+            m_repo.UpdateNyuko _
+                ws.Cells(i, 6).value, _
+                ws.Cells(i, 5).value, _
+                ws.Cells(i, 1).value, _
+                ws.Cells(i, 2).value, _
+                ws.Cells(i, 7).value
+
+        End If
+
+    Next i
+
+    dbTran.Commit
+    Exit Sub
+
+ErrHandler:
+    dbTran.Rollback
+    MsgBox "入庫転送中にエラー：" & Err.Description
+
+End Sub
+
+########################################
+'==== clsPathManager ====
+
+Private SUB_FOLDER As String
+Private LOCA_FILE As String
+Private db_Path As String
+Private STORE_FILE As String
+Private DELI_FILE As String
+Private SHIP_FILE As String
+
+
+Private Sub Class_Initialize()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("path")
+    
+    SUB_FOLDER = ws.Range("C15").value
+    db_Path = ws.Range("C3").value
+    LOCA_FILE = "_StorageLog.csv"   ' デフォルト
+    STORE_FILE = ws.Range("C17").value 'ロケーション
+    DELI_FILE = ws.Range("C19").value '納入
+    SHIP_FILE = ws.Range("C21").value '出荷
+    
+End Sub
+
+' ▼ ファイル番号セット用
+Public Sub SetFileType(ByVal i As Long)
+
+    Select Case i
+        Case 1
+            LOCA_FILE = STORE_FILE
+        Case 2
+            LOCA_FILE = DELI_FILE
+        Case Else
+            LOCA_FILE = SHIP_FILE
+    End Select
+
+End Sub
+
+' ▼ パス取得用 Property
+'Public Property Get CsvPath() As String
+'    CsvPath = db_Path & "\" & SUB_FOLDER & "\" & LOCA_FILE
+'End Property
+Private Function GetUserProfile() As String
+    GetUserProfile = Environ("USERPROFILE")
+End Function
+
+Public Property Get accdbPath() As String
+    accdbPath = GetUserProfile & db_Path
+End Property
+Public Property Get CsvPath() As String
+    Dim i_day As Long
+    
+    i_day = Replace(Date, "/", "")
+    CsvPath = GetUserProfile & SUB_FOLDER & "\" & i_day & LOCA_FILE
+    
+End Property
+'Public Property Let LOCA_FILE(csvPath_M)
+'   LOCA_FILE = csvPath_M
+'End Property
+
+###################################
+'userform
+Private m_kind As ImportKind
+Private m_sheetName As String
+Private m_columnWidths As String
+Private m_columnCount As Long
+Public Sub InitializeForm(ByVal kind As ImportKindCa)
+
+    m_kind = kind
+    
+    SetupByKind
+    LoadListData
+
+End Sub
+Private Sub SetupByKind()
+
+    Select Case m_kind
+    
+        Case IK_Location_1
+            m_sheetName = "入庫"
+            m_columnCount = 13
+            m_columnWidths = "0;0;0;0;80;400;0;70;95;95;95;95;95"
+            Me.Label1.Caption = Date & " 入庫"
+            
+        Case IK_Delivery_1
+            m_sheetName = "納入"
+            m_columnCount = 6
+            m_columnWidths = "80;120;80;300;100;100"
+            Me.Label1.Caption = Date & " 納入"
+            
+        Case IK_Shipment_1
+            m_sheetName = "出荷"
+            m_columnCount = 5
+            m_columnWidths = "100;100;100;200;100"
+            Me.Label1.Caption = Date & " 出荷"
+            
+        Case Else
+            MsgBox "未定義の種別です", vbExclamation
+            Unload Me
+    End Select
+
+End Sub
+Private Sub LoadListData()
+
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim data
+    
+    On Error GoTo ErrHandler
+    
+    Set ws = ThisWorkbook.Worksheets("free")
+    
+    lastRow = ws.Range("A" & ws.Rows.Count).End(xlUp).Row
+    
+    If lastRow < 1 Then Exit Sub
+    
+    data = ws.Range("A1").Resize(lastRow, m_columnCount).value
+    
+    With Me.ListBox1
+        .Clear
+        .ColumnCount = m_columnCount
+        .ColumnWidths = m_columnWidths
+        .List = data
+    End With
+    
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "データ読込エラー：" & Err.Description, vbExclamation
+
+End Sub
+
+Private Sub CommandButton1_Click()
+ Dim svc As New CImportActionService
+    Dim ws As Worksheet
+    
+    Set ws = ThisWorkbook.Worksheets(m_sheetName)
+    
+    svc.Initialize m_kind
+    svc.Execute ws
+Unload Me
+End Sub
+
+Private Sub UserForm_Click()
+
+End Sub
+###########################
+'標準モジュール
+'  └ ShowImportForm()
+'
+'UserForm1
+'  ├ InitializeForm()
+'  ├ SetupByKind()
+'  └ LoadListData()
+Public Enum ImportKindCa '種類
+    IK_Location_1 = 1   '入庫
+    IK_Delivery_1 = 2   '納入
+    IK_Shipment_1 = 3   '出荷
+End Enum
+Public Sub ShowImportForm(ByVal kind As ImportKindCa)
+
+    Dim frm As New UserForm11
+    frm.InitializeForm kind
+    frm.Show
+
+End Sub
+Sub 入庫表示()
+    ShowImportForm IK_Location_1
+End Sub
+
+Sub 納入表示()
+    ShowImportForm IK_Delivery_1
+End Sub
+
+Sub 出荷表示()
+    ShowImportForm IK_Shipment_1
+End Sub
+
+##############################
+'CDatabaseConnection
+Private mConn As ADODB.Connection
+Private Const MAX_RETRY As Long = 3
+Private Const PROVIDER_NAME As String = "Microsoft.ACE.OLEDB.12.0"
+
+Public Function TryOpenConnection(ByVal dbPath As String, _
+                     Optional ByVal showMessage As Boolean = False) As Boolean
+
+    Dim retry As Long
+    
+    For retry = 1 To MAX_RETRY
+    
+        On Error Resume Next
+        
+        If mConn Is Nothing Then
+            Set mConn = New ADODB.Connection
+            mConn.Provider = PROVIDER_NAME
+        End If
+        
+        If mConn.State <> adStateOpen Then
+            mConn.Open dbPath
+        End If
+        
+        If Err.Number = 0 And mConn.State = adStateOpen Then
+            TryOpenConnection = True
+            On Error GoTo 0
+            Exit Function
+        End If
+        
+        Err.Clear
+        On Error GoTo 0
+        DoEvents
+        
+    Next retry
+    
+    If showMessage Then
+        MsgBox "DB connection failed.", vbCritical
+    End If
+    
+End Function
+Public Sub OpenDB(ByVal dbPath As String)
+
+    Set mConn = New ADODB.Connection
+    mConn.Provider = PROVIDER_NAME
+    mConn.Open dbPath
+
+End Sub
+
+Public Property Get Connection() As ADODB.Connection
+    Set Connection = mConn
+End Property
+
+Public Sub CloseDB()
+
+    If Not mConn Is Nothing Then
+        If mConn.State = adStateOpen Then mConn.Close
+    End If
+    
+    Set mConn = Nothing
+
+End Sub
+
+
+##########################
